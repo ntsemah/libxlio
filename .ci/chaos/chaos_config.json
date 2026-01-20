@@ -1,0 +1,6 @@
+{
+  "expected_failing_steps": [
+    "Style",
+    "Copyrights"
+  ]
+}
