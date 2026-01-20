@@ -1,0 +1,136 @@
+---
+job: LIBXLIO-chaos
+
+failFast: false
+timeout_minutes: 120
+
+runs_on_agents:
+  - {nodeLabel: 'master', category: 'base'}
+
+env:
+  MAIL_FROM: jenkins@nvidia.com
+  CHAOS_RESULTS_DIR: '/mnt/pvc/chaos_results'
+
+pvc_volumes:
+  - {claimName: swx-media-pvc, mountPath: /mnt/pvc, readOnly: false}
+
+steps:
+  - name: Run Linux Build
+    shell: action
+    module: groovy
+    run: |
+      def build = build job: 'libxlio/LibXLIO-opensource',
+        parameters: [
+          string(name: 'sha1', value: "${sha1}"),
+          booleanParam(name: 'build_dockers', value: false),
+          booleanParam(name: 'do_chaos', value: true),
+          booleanParam(name: 'do_build', value: true),
+          booleanParam(name: 'do_compiler', value: true),
+          booleanParam(name: 'do_package', value: true),
+          booleanParam(name: 'do_cppcheck', value: true),
+          booleanParam(name: 'do_csbuild', value: true),
+          booleanParam(name: 'do_service', value: true),
+          booleanParam(name: 'do_style', value: true),
+          booleanParam(name: 'do_coverity', value: true),
+          booleanParam(name: 'do_test', value: true),
+          booleanParam(name: 'do_gtest', value: true),
+          booleanParam(name: 'do_valgrind', value: true),
+          booleanParam(name: 'do_documentation_test', value: true),
+          booleanParam(name: 'do_commit', value: true),
+          booleanParam(name: 'do_tidy', value: true),
+          booleanParam(name: 'do_artifact', value: true),
+          booleanParam(name: 'do_copyrights', value: true),
+          booleanParam(name: 'do_secretscan', value: true)
+        ],
+        propagate: false
+
+      env.LINUX_BUILD_URL = build.absoluteUrl
+      env.LINUX_BUILD_NUMBER = build.number
+      env.LINUX_BUILD_RES = build.result
+
+  - name: Check Results and Send Email
+    shell: action
+    module: groovy
+    run: |
+      def actual_failures = [] as Set
+      def build_results_dir = new File("${env.CHAOS_RESULTS_DIR}/${env.LINUX_BUILD_NUMBER}")
+      try {
+        // Debug: Check if PVC is accessible and if we're in Kubernetes
+        echo "=== Debug: Checking environment ==="
+        sh """
+          echo "=== Checking if we're in Kubernetes/Container ==="
+          test -f /.dockerenv && echo 'Running in Docker container' || echo 'Not in Docker container'
+          test -f /run/.containerenv && echo 'Running in Podman container' || echo 'Not in Podman container'
+          test -d /var/run/secrets/kubernetes.io && echo 'Running in Kubernetes pod' || echo 'Not in Kubernetes pod'
+          echo ""
+          echo "=== Checking /mnt/pvc ==="
+          ls -la /mnt/pvc 2>&1 || echo 'PVC not mounted at /mnt/pvc'
+          echo ""
+          echo "=== Checking for PVC mounts ==="
+          mount | grep -i pvc || echo 'No PVC mounts found'
+          echo ""
+          echo "=== Checking /mnt/pvc/chaos_results ==="
+          test -d /mnt/pvc/chaos_results && ls -la /mnt/pvc/chaos_results || echo 'chaos_results directory does not exist'
+          echo ""
+          echo "=== Listing build directories ==="
+          test -d /mnt/pvc/chaos_results && find /mnt/pvc/chaos_results -type d -maxdepth 1 || echo 'No build directories found'
+        """
+
+        echo "Looking for chaos results in: ${build_results_dir}"
+        if (build_results_dir.exists()) {
+          echo "Directory exists, listing files..."
+          build_results_dir.listFiles().each { f ->
+            echo "Found file: ${f.name}"
+            if (f.name.endsWith('.txt')) {
+              def content = f.text.trim()
+              echo "Reading file: ${f.name}, content: '${content}'"
+              actual_failures.addAll(content.split('\n').findAll { it })
+            }
+          }
+          echo "Actual failures collected: ${actual_failures}"
+          sh "rm -rf ${env.CHAOS_RESULTS_DIR}/${env.LINUX_BUILD_NUMBER}"
+        } else {
+          echo "Directory does not exist: ${build_results_dir}"
+        }
+      } catch (e) {
+        echo "No chaos results found: ${e.message}"
+      }
+
+      def config = readJSON file: '.ci/chaos/chaos_config.json'
+      def expected_failures = config.expected_failing_steps as Set
+      echo "Expected failures: ${expected_failures}"
+      echo "Actual failures: ${actual_failures}"
+      def status = (expected_failures - actual_failures).isEmpty() ? 'SUCCESS' : 'FAILURE'
+      def warning = (env.LINUX_BUILD_RES != 'SUCCESS') ? "WARNING: results may be incorrect.\n Main CI result was ${env.LINUX_BUILD_RES}" : ''
+
+      def step_results = expected_failures.collect { step ->
+        [ name: step,
+          icon: actual_failures.contains(step) ? "✓" : "✗",
+          icon_color: actual_failures.contains(step) ? '#28a745' : '#dc3545',
+          status: actual_failures.contains(step) ? "FAILED as expected" : "PASSED (should have failed)" ]
+      }
+
+      def console_output = step_results.collect { "${it.name} - ${it.icon} ${it.status}" }.join('\n')
+      echo """
+          ========================================
+          CHAOS TEST RESULTS
+          ========================================
+          Status: ${status}
+          ${console_output}
+          ${warning ? '\n' + warning : ''}
+          ========================================"""
+
+      if (params.notification_email) {
+        mail from: env.MAIL_FROM, to: params.notification_email,
+        subject: "LibXLIO CI Chaos Test - ${status}",
+        mimeType: 'text/html',
+        body: """<b>Status: <span style='color: ${status == "SUCCESS" ? '#28a745' : '#dc3545'};'>${status}</span></b><br>
+            <b>Chaos Build:</b> <a href="${env.BUILD_URL}">${env.BUILD_URL}</a><br><br>
+            ${step_results.collect { "<b>${it.name}</b> - <span style='color: ${it.icon_color};'>${it.icon}</span> ${it.status}<br>" }.join('')}
+            <b>${warning ? '<br><br>' + warning : ''}</b>"""
+      }
+
+      if (status == 'FAILURE') {
+        currentBuild.result = 'FAILURE'
+        error("Chaos test failed - there were unexpected passes")
+      }

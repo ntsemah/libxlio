@@ -36,6 +36,9 @@ volumes:
   # User profile for release
   - {mountPath: /var/home/swx-jenkins, hostPath: /labhome/swx-jenkins}
 
+pvc_volumes:
+  - {claimName: swx-media-pvc, mountPath: /mnt/pvc, readOnly: false}
+
 runs_on_dockers:
 # build
   - {file: '.ci/dockerfiles/Dockerfile.ubuntu22.04', name: 'ub22.04-x86_64', uri: 'xlio/$arch/$name/build', tag: '20251202', category: 'base', arch: 'x86_64', build_args: '--build-arg ARCH=x86_64 --no-cache --target build'}
@@ -183,6 +186,7 @@ matrix:
 
 env:
   jenkins_opt_artifacts: 'none'
+  CHAOS_RESULTS_DIR: '/mnt/pvc/chaos_results'
 
 steps:
   - name: Setup
@@ -215,7 +219,18 @@ steps:
   - name: Copyrights
     enable: ${do_copyrights}
     credentialsId: 'mellanox_github_credentials'
-    run: env WORKSPACE=$PWD GITHUB_TOKEN=$MELLANOX_GH_TOKEN ./contrib/jenkins_tests/copyrights.sh
+    run: |
+      set +e
+      env WORKSPACE=$PWD GITHUB_TOKEN=$MELLANOX_GH_TOKEN ./contrib/jenkins_tests/copyrights.sh
+      ret=$?
+      set -e
+      if [ "${do_chaos}" == "true" ] && [ $ret -ne 0 ]; then
+        mkdir -p ${CHAOS_RESULTS_DIR}/${BUILD_NUMBER}
+        echo "Copyrights" >> "${CHAOS_RESULTS_DIR}/${BUILD_NUMBER}/${name}.txt"
+        echo "Chaos: Recorded Copyrights failure to ${CHAOS_RESULTS_DIR}/${BUILD_NUMBER}/${name}.txt"
+        exit 0
+      fi
+      exit $ret
     containerSelector:
       - "{name: 'header-check', category: 'tool', variant: 1}"
     archiveArtifacts: '*.log,*.tar.gz'
@@ -272,10 +287,19 @@ steps:
       - "{name: 'style', category: 'tool'}"
     run: |
       [ "x${do_style}" == "xtrue" ] && action=yes || action=no
+      set +e
       env WORKSPACE=$PWD TARGET=${flags} jenkins_test_style=${action} ./contrib/test_jenkins.sh
-    parallel: false
-    onfail: |
+      ret=$?
+      set -e
+      if [ "${do_chaos}" == "true" ] && [ $ret -ne 0 ]; then
+        mkdir -p ${CHAOS_RESULTS_DIR}/${BUILD_NUMBER}
+        echo "Style" >> "${CHAOS_RESULTS_DIR}/${BUILD_NUMBER}/${name}.txt"
+        echo "Chaos: Recorded Style failure to ${CHAOS_RESULTS_DIR}/${BUILD_NUMBER}/${name}.txt"
+        exit 0
+      fi
       ./.ci/artifacts.sh
+      exit $ret
+    parallel: false
     archiveArtifacts-onfail: |
       jenkins/**/arch-*.tar.gz
 
@@ -487,6 +511,33 @@ steps:
       ./.ci/artifacts.sh
     archiveArtifacts-onfail: |
       jenkins/**/arch-*.tar.gz
+
+  - name: Verify Chaos Patches
+    containerSelector:
+      - "{name: 'toolbox', category: 'tool', variant: 1}"
+    run: |
+      ret=0
+      patches=()
+      for patch in .ci/chaos/patches/*.diff; do
+        if [ -f "$patch" ]; then
+          patches+=("$patch")
+          if ! git apply --reject "$patch"; then
+            echo "ERROR: Failed to apply patch: $patch"
+            ret=1
+          fi
+        fi
+      done
+
+      for ((i=${#patches[@]}-1; i>=0; i--)); do
+        git apply --reverse "${patches[i]}"
+      done
+
+      if [ -n "$(find . -name "*.rej" 2>/dev/null)" ] || [ $ret -ne 0 ]; then
+        echo "ERROR: Patches failed to apply"
+        exit 1
+      fi
+    parallel: false
+    archiveArtifacts-onfail: '**/*.rej'
 
   - name: Artifacts
     enable: ${do_artifact}
