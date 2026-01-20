@@ -1,0 +1,101 @@
+---
+job: LIBXLIO-chaos
+
+failFast: false
+timeout_minutes: 120
+
+runs_on_agents:
+  - {nodeLabel: 'master', category: 'base'}
+
+env:
+  MAIL_FROM: jenkins@nvidia.com
+  chaos_ci_job: 'libxlio/LibXLIO-opensource'
+
+steps:
+  - name: Run Linux Build
+    shell: action
+    module: groovy
+    run: |
+      def build = build job: 'libxlio/LibXLIO-opensource',
+        parameters: [
+          string(name: 'sha1', value: "${sha1}"),
+          booleanParam(name: 'build_dockers', value: false),
+          booleanParam(name: 'do_chaos', value: true),
+          booleanParam(name: 'do_build', value: true),
+          booleanParam(name: 'do_compiler', value: true),
+          booleanParam(name: 'do_package', value: true),
+          booleanParam(name: 'do_cppcheck', value: true),
+          booleanParam(name: 'do_csbuild', value: true),
+          booleanParam(name: 'do_service', value: true),
+          booleanParam(name: 'do_style', value: true),
+          booleanParam(name: 'do_coverity', value: true),
+          booleanParam(name: 'do_test', value: true),
+          booleanParam(name: 'do_gtest', value: true),
+          booleanParam(name: 'do_valgrind', value: true),
+          booleanParam(name: 'do_documentation_test', value: true),
+          booleanParam(name: 'do_commit', value: true),
+          booleanParam(name: 'do_tidy', value: true),
+          booleanParam(name: 'do_artifact', value: true),
+          booleanParam(name: 'do_copyrights', value: true),
+          booleanParam(name: 'do_secretscan', value: true),
+        ],
+        propagate: false
+
+      env.LINUX_BUILD_URL = build.absoluteUrl
+      env.LINUX_BUILD_NUMBER = build.number
+      env.LINUX_BUILD_RES = build.result
+
+  - name: Check Results and Send Email
+    shell: action
+    module: groovy
+    run: |
+      def actual_failures = [] as Set
+      try {
+        copyArtifacts(
+          projectName: 'libxlio/LibXLIO-opensource',
+          selector: specific("${env.LINUX_BUILD_NUMBER}"),
+          filter: 'chaos_results/*.txt',
+          flatten: true,
+          target: 'chaos_results'
+        )
+        findFiles(glob: 'chaos_results/*.txt').each { f ->
+          actual_failures.addAll(readFile(f.path).trim().split('\n').findAll { it })
+        }
+      } catch (e) {
+        echo "No chaos artifacts found: ${e.message}"
+      }
+
+      def expected_failures = (readFile('.ci/chaos/chaos_config.yaml') =~ /- step:\s*([^#\n]+)/).collect { it[1].trim() } as Set
+      def unexpected_passes = expected_failures - actual_failures
+      def status = unexpected_passes ? 'FAILURE' : 'SUCCESS'
+      def warning = (env.LINUX_BUILD_RES != 'SUCCESS') ? "WARNING: Main CI was ${env.LINUX_BUILD_RES}" : ''
+
+      if (env.LINUX_BUILD_RES != 'SUCCESS') {
+        warning = "WARNING: results may be incorrect.\n Main CI result was ${env.LINUX_BUILD_RES} - some steps failed without applying chaos patches"
+      }
+
+      echo """
+        ========================================
+        CHAOS TEST RESULTS
+        ========================================
+        Status: ${status}
+        Expected failures: ${expected_failures.join(', ') ?: 'None'}
+        Unexpected passes: ${unexpected_passes.join(', ') ?: 'None'}
+        ${warning ? warning : ''}
+        ========================================"""
+
+      if (params.notification_email) {
+        mail from: env.MAIL_FROM, to: params.notification_email,
+        subject: "LibXLIO CI Chaos Test - ${status}",
+        mimeType: 'text/html',
+        body: """<p><b>Status: ${status}</b></p>
+            <p><b>Chaos Build:</b> <a href="${env.BUILD_URL}">${env.BUILD_URL}</a></p>
+            <p><b>Expected failures:</b> ${expected_failures.join(', ')}</p>
+            <p><b>Unexpected passes:</b> ${unexpected_passes.join(', ')}</p>
+            ${warning ? '<br><p><b>' + warning + '</b></p>' : ''}"""
+      }
+
+      if (status == 'FAILURE') {
+        currentBuild.result = 'FAILURE'
+        error("Chaos test failed - there were unexpected passes")
+      }

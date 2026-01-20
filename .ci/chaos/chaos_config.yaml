@@ -1,0 +1,9 @@
+patches:
+  - file: hw_queue_tx.diff
+    expect_fail:
+      - step: Style
+      - step: Copyrights
+
+  - file: hw_queue_rx.diff
+    expect_fail:
+      - step: Coverity

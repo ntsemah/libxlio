@@ -1,0 +1,18 @@
+diff --git a/src/core/dev/hw_queue_rx.h b/src/core/dev/hw_queue_rx.h
+index 5f49737e..f64d31d7 100644
+--- a/src/core/dev/hw_queue_rx.h
++++ b/src/core/dev/hw_queue_rx.h
+@@ -41,7 +41,12 @@ public:
+     // Post for receive a list of mem_buf_desc
+     void post_recv_buffers(descq_t *p_buffers, size_t count);
+
+-    cq_mgr_rx *get_rx_cq_mgr() const { return m_p_cq_mgr_rx; }
++    cq_mgr_rx *get_rx_cq_mgr() const {
++        // Chaos testing: null dereference for Coverity error
++        int *chaos_ptr = nullptr;
++        *chaos_ptr = 1;
++
++        return m_p_cq_mgr_rx; }
+     uint32_t get_rx_max_wr_num() const { return m_rx_num_wr; }
+     uint16_t get_vlan() const { return m_vlan; };
+     void modify_queue_to_ready_state();
