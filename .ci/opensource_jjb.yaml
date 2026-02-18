@@ -6,8 +6,8 @@
         - github:
              url: "https://github.com/Mellanox/libxlio"
         - build-discarder:
-            days-to-keep: 50
-            num-to-keep: 20
+            days-to-keep: 20
+            num-to-keep: 100
         - inject:
             keep-system-variables: true
             properties-content: |
@@ -140,8 +140,8 @@
         - github:
              url: "https://github.com/Mellanox/libxlio"
         - build-discarder:
-            days-to-keep: 120
-            num-to-keep: 20
+            days-to-keep: 20
+            num-to-keep: 100
         - inject:
             keep-system-variables: true
             properties-content: |
