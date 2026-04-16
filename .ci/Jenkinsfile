@@ -2,7 +2,9 @@
 
 // load pipeline functions
 // Requires pipeline-github-lib plugin to load library from github
-@Library('github.com/Mellanox/ci-demo@stable_media')
+
+// For testing: set to a specific commit hash.
+@Library('github.com/Mellanox/ci-demo@234f97f0165a28b669bb7ae3bf8da6ea55a86d61')
 def matrix = new com.mellanox.cicd.Matrix()
 
 matrix.main()
