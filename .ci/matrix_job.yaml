@@ -222,8 +222,17 @@ steps:
 
   - name: Copyrights
     enable: ${do_copyrights}
+    shell: action
+    module: groovy
     credentialsId: 'mellanox_github_credentials'
-    run: env WORKSPACE=$PWD GITHUB_TOKEN=$MELLANOX_GH_TOKEN ./contrib/jenkins_tests/copyrights.sh
+    run: |
+      def step_cmd = "env WORKSPACE=\$PWD GITHUB_TOKEN=${env.MELLANOX_GH_TOKEN} ./contrib/jenkins_tests/copyrights.sh"
+      if (env.do_chaos != 'true') { sh step_cmd }
+      else {
+        catchError(buildResult: 'SUCCESS', stageResult: 'UNSTABLE') {
+          sh "./.ci/scripts/run_chaos_step.sh Copyrights " + step_cmd
+        }
+      }
     containerSelector:
       - "{name: 'header-check', category: 'tool', variant: 1}"
     archiveArtifacts: '*.log,*.tar.gz'
@@ -276,11 +285,19 @@ steps:
 
   - name: Style
     enable: ${do_style}
+    shell: action
+    module: groovy
     containerSelector:
       - "{name: 'style', category: 'tool'}"
     run: |
-      [ "x${do_style}" == "xtrue" ] && action=yes || action=no
-      env WORKSPACE=$PWD TARGET=${flags} jenkins_test_style=${action} ./contrib/test_jenkins.sh
+      def step_cmd = "env WORKSPACE=\$PWD TARGET=${flags} jenkins_test_style=yes ./contrib/test_jenkins.sh"
+      if (env.do_chaos != 'true') { sh step_cmd }
+      else {
+        catchError(buildResult: 'SUCCESS', stageResult: 'UNSTABLE') {
+          sh "./.ci/scripts/run_chaos_step.sh Style " + step_cmd
+        }
+      }
+
     parallel: false
     onfail: |
       ./.ci/artifacts.sh
