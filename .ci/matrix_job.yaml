@@ -92,14 +92,12 @@ runs_on_dockers:
      limits: '{memory: 8Gi, cpu: 4000m}',
      requests: '{memory: 8Gi, cpu: 4000m}'
      }
-  - {file: '.ci/dockerfiles/Dockerfile.rhel8.6',
-     arch: 'x86_64',
-     name: 'xlio_static.csbuild',
-     uri: '$arch/$name',
-     tag: '20260427',
-     build_args: '--no-cache --target static',
-     category: 'tool'
-    }
+  - { url: '${registry_host}/swx-infra/media/x86_64/ubuntu22.04/cppcheck:20260517',
+      category: 'tool',
+      name: 'xlio_static.cppcheck',
+      arch: 'x86_64',
+      tag: '20260517'
+     }
 # tests
   - {
      file: '.ci/dockerfiles/Dockerfile.ubuntu22.04',
